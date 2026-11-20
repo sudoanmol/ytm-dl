@@ -41,4 +41,16 @@ Files go to `~/Music/ytm-dl/<Artist>/<Album>/`. Set `YTM_DL_DIR` to change that.
 
 ## Quality
 
-Downloads the best stream YouTube offers, which is Opus at about 130–160 kbps (format 251) for free accounts. The audio is kept as-is, never re-encoded, so files end up as `.opus` (or `.m4a` when YouTube only has AAC). Up to 3 downloads run at once; the rest wait.
+The app saves `.m4a` (AAC, about 128 kbps). It plays everywhere, including iOS apps like Documents by Readdle. The audio is YouTube's own stream, never re-encoded. Up to 3 downloads run at once; the rest wait.
+
+## Opus library (e.g. for Navidrome)
+
+Every finished download is logged to `~/Music/ytm-dl/.ytm-dl.jsonl`. One command downloads that whole library again as Opus, YouTube's best free stream (about 130–160 kbps), into a separate folder:
+
+```bash
+ytm-dl opus            # → ~/Music/ytm-dl-opus
+ytm-dl opus ~/navidrome/music
+bun run opus           # same, without `bun link`
+```
+
+Run it again any time: it only fetches what's new or failed last time. Finished tracks are listed in `.ytm-dl-archive.txt` in the Opus folder; delete that file (or a line in it) to fetch them again.
