@@ -20,7 +20,20 @@ bun link        # optional: puts `ytm-dl` on your PATH
 bun start       # or: ytm-dl
 ```
 
-Files go to `~/Music/ytm-dl/<Artist>/<Album>/`. Set `YTM_DL_DIR` to change that.
+## Library layout
+
+```
+~/Music/ytm-dl/
+  Radiohead - Creep.m4a                 ← songs in no playlist
+  Road Trip/
+    Radiohead - Bangers + Mash.m4a      ← a playlist is a folder
+  Chill/
+    Radiohead - Lull.m4a
+```
+
+- Files are named `Artist - Title`. Album, track number and year are in the tags.
+- A song lives in one place only. Adding it to another playlist moves it there; `d` moves it back to the main folder.
+- Set `YTM_DL_DIR` to use another folder.
 
 ## Keys
 
@@ -34,6 +47,8 @@ Files go to `~/Music/ytm-dl/<Artist>/<Album>/`. Set `YTM_DL_DIR` to change that.
 | `↵` | song: download. album: open its track list |
 | `d` | download the selected song, or the whole selected album |
 | `D` | in an album: download the whole album |
+| `p` | add the selected song (or album) to a playlist: pick one, or type a new name |
+| `P` | in an album: add the whole album to a playlist |
 | `esc` / `h` | back out of an album, or back to the search box |
 | `/` | focus search |
 | `c` | clear finished downloads |
@@ -45,12 +60,24 @@ The app saves `.m4a` (AAC, about 128 kbps). It plays everywhere, including iOS a
 
 ## Opus library (e.g. for Navidrome)
 
-Every finished download is logged to `~/Music/ytm-dl/.ytm-dl.jsonl`. One command downloads that whole library again as Opus, YouTube's best free stream (about 130–160 kbps), into a separate folder:
+Every saved file is logged to `~/Music/ytm-dl/.ytm-dl.jsonl`. One command mirrors the library as Opus, YouTube's best free stream (about 130–160 kbps), with the same names and playlist folders:
 
 ```bash
-ytm-dl opus            # → ~/Music/ytm-dl-opus
+ytm-dl opus            # → ~/Music/ytm-dl-opus  (or bun run opus)
 ytm-dl opus ~/navidrome/music
-bun run opus           # same, without `bun link`
 ```
 
-Run it again any time: it only fetches what's new or failed last time. Finished tracks are listed in `.ytm-dl-archive.txt` in the Opus folder; delete that file (or a line in it) to fetch them again.
+Run it any time. It moves files for songs that changed playlist and only downloads what's missing.
+
+## Sync to R2
+
+```bash
+ytm-dl sync            # or bun run sync
+```
+
+Updates the Opus library, then mirrors it to the R2 bucket `music` with rclone: new files go up, and files gone locally are deleted from the bucket. It refuses to run if the Opus library is empty.
+
+The R2 keys come from 1Password via `op run`, never from a file. One-time setup:
+
+1. Cloudflare dashboard → R2 → Manage API tokens → Create API token with **Object Read & Write** on the `music` bucket.
+2. In 1Password, vault **API Keys**, create an item **Cloudflare R2 music** with three fields: `access_key_id`, `secret_access_key`, and `endpoint` (the S3 URL, `https://<account-id>.r2.cloudflarestorage.com`).
