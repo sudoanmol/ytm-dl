@@ -1,24 +1,14 @@
 #!/usr/bin/env bun
 import { createCliRenderer, type KeyEvent } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
+import { mkdirSync } from "node:fs"
+import { join } from "node:path"
 import { useEffect, useRef, useState } from "react"
-import { albumRef, busy, DEFAULT_TARGET, download as runDownload, killAll, OUT_DIR, record, type Entry } from "./download"
+import { busy, download as runDownload, killAll, listPlaylists, M4A, OPUS_DIR, OUT_DIR, record, type Request } from "./download"
+import { PlaylistPicker } from "./picker"
+import { C } from "./theme"
 import { getAlbum, search, type Album, type AlbumDetail, type Item, type Kind, type Song } from "./ytm"
 
-const C = {
-  bg: "#16161e",
-  panel: "#1a1b26",
-  border: "#2f334d",
-  focus: "#7aa2f7",
-  text: "#c0caf5",
-  dim: "#565f89",
-  muted: "#a9b1d6",
-  accent: "#bb9af7",
-  sel: "#283457",
-  green: "#9ece6a",
-  red: "#f7768e",
-  yellow: "#e0af68",
-}
 const SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 type Job = {
@@ -77,6 +67,9 @@ function App() {
   const [notice, setNotice] = useState<string | null>(null)
   const [frame, setFrame] = useState(0)
   const searchId = useRef(0)
+  // `p` opens the playlist picker for this item; the last playlist used is listed first.
+  const [picking, setPicking] = useState<Item | null>(null)
+  const [lastPlaylist, setLastPlaylist] = useState<string | null>(null)
 
   const anyRunning = loading !== null || jobs.some((j) => j.status === "running" || j.status === "queued")
   useEffect(() => {
@@ -128,7 +121,7 @@ function App() {
 
   const patch = (key: string, p: Partial<Job>) => setJobs((js) => js.map((j) => (j.key === key ? { ...j, ...p } : j)))
 
-  async function download(job: Omit<Job, "status" | "pct" | "step">, entry: () => Promise<Entry>) {
+  async function download(job: Omit<Job, "status" | "pct" | "step">, request: () => Promise<Request>) {
     const existing = jobs.find((j) => j.key === job.key)
     if (existing && existing.status !== "failed") {
       setNotice(existing.status === "done" ? `Already downloaded: ${job.label}` : `Already queued: ${job.label}`)
@@ -136,36 +129,46 @@ function App() {
     }
     setJobs((js) => [{ ...job, status: "queued", pct: 0, step: "" }, ...js.filter((j) => j.key !== job.key)])
     try {
-      const e = await entry()
-      const err = await runDownload(
-        e,
-        DEFAULT_TARGET,
-        () => patch(job.key, { status: "running" }),
-        (line) => {
+      const req = await request()
+      const saving: Promise<void>[] = []
+      const err = await runDownload(req, M4A, {
+        onStart: () => patch(job.key, { status: "running" }),
+        onLine: (line) => {
           const m = line.match(/^(\S+)\/(\S+)\s+([\d.]+)%/)
           if (!m) return
           // Only whole-album jobs span the playlist; a single album track still reports its position in it.
-          const [i, n] = job.key.startsWith("album:") ? [Number(m[1]) || 1, Number(m[2]) || 1] : [1, 1]
+          const whole = req.source.type === "album" && !req.source.items
+          const [i, n] = whole ? [Number(m[1]) || 1, Number(m[2]) || 1] : [1, 1]
           patch(job.key, { pct: ((i - 1 + Number(m[3]) / 100) / n) * 100, step: n > 1 ? `${i}/${n}` : "" })
         },
-      )
-      if (!err) await record(e)
+        onSaved: (saved) => void saving.push(record(saved)),
+      })
+      await Promise.all(saving)
       patch(job.key, err ? { status: "failed", error: err } : { status: "done", pct: 100 })
     } catch (e) {
       patch(job.key, { status: "failed", error: String((e as Error).message ?? e) })
     }
   }
 
-  const downloadSong = (s: Song) => {
+  const where = (playlist: string | null) => (playlist ? ` → ${playlist}` : "")
+  const downloadSong = (s: Song, playlist: string | null = null) => {
     const track = album?.tracks.find((t) => t.id === s.id)
-    download({ key: `song:${s.id}`, label: s.title, sub: track ? `${s.artist} · ${s.album}` : s.artist }, async () =>
-      album && track ? { type: "album", album: albumRef(album), track: track.index } : { type: "song", song: s },
+    download(
+      { key: `song:${s.id}:${playlist ?? ""}`, label: s.title, sub: s.artist + where(playlist) },
+      async () => ({
+        playlist,
+        // Album tracks come from the album's playlist so they carry album tags and track numbers.
+        source: album && track ? { type: "album", playlistUrl: album.playlistUrl, items: [track.index] } : { type: "song", ids: [s.id] },
+      }),
     )
   }
-  const downloadAlbum = (a: Album) =>
-    download({ key: `album:${a.id}`, label: a.title, sub: `${a.artist} · album` }, async () =>
-      ({ type: "album", album: albumRef(album?.id === a.id ? album : await getAlbum(a)) }),
-    )
+  const downloadAlbum = (a: Album, playlist: string | null = null) =>
+    download({ key: `album:${a.id}:${playlist ?? ""}`, label: a.title, sub: `${a.artist} · album${where(playlist)}` }, async () => ({
+      playlist,
+      source: { type: "album", playlistUrl: (album?.id === a.id ? album : await getAlbum(a)).playlistUrl },
+    }))
+  const downloadItem = (it: Item, playlist: string | null = null) =>
+    it.kind === "album" ? downloadAlbum(it, playlist) : downloadSong(it, playlist)
 
   function quit() {
     killAll()
@@ -191,6 +194,7 @@ function App() {
   useKeyboard((key: KeyEvent) => {
     const k = key.name
     if (key.ctrl && k === "c") return quit()
+    if (picking) return // the picker handles its own keys
     if (k !== "q") quitArmed.current = false
 
     if (k === "tab") {
@@ -225,11 +229,15 @@ function App() {
       if (item?.kind === "album") openAlbum(item)
       else if (item) downloadSong(item)
     } else if (k === "d" && !key.shift) {
-      if (item?.kind === "album") downloadAlbum(item)
-      else if (item) downloadSong(item)
+      if (item) downloadItem(item)
     } else if (k === "d" && key.shift) {
       if (album) downloadAlbum(album)
       else if (item?.kind === "album") downloadAlbum(item)
+    } else if (k === "p" && !key.shift) {
+      if (item) setPicking(item)
+    } else if (k === "p" && key.shift) {
+      if (album) setPicking(album)
+      else if (item?.kind === "album") setPicking(item)
     } else if (k === "escape" || k === "h" || k === "left" || k === "backspace") {
       if (album) {
         searchId.current++
@@ -244,7 +252,7 @@ function App() {
     }
   })
 
-  const jobFor = (it: Item) => jobs.find((j) => j.key === `${it.kind}:${it.id}`)
+  const jobFor = (it: Item) => jobs.find((j) => j.key.startsWith(`${it.kind}:${it.id}:`))
   const spin = SPIN.charAt(frame % SPIN.length)
 
   // Column widths for the current list.
@@ -298,12 +306,13 @@ function App() {
     focus === "input"
       ? [["↵", "search"], ["tab", kind === "song" ? "albums" : "songs"], ["esc", "results"], ["ctrl+c", "quit"]]
       : album
-        ? [["j/k", "move"], ["↵ d", "track"], ["D", "whole album"], ["esc", "back"], ["/", "search"], ["q", "quit"]]
+        ? [["j/k", "move"], ["↵ d", "track"], ["D", "album"], ["p P", "to playlist"], ["esc", "back"], ["/", "search"], ["q", "quit"]]
         : [
             ["j/k", "move"],
             ...(kind === "song"
               ? ([["↵ d", "download"]] as [string, string][])
               : ([["↵", "open"], ["d", "whole album"]] as [string, string][])),
+            ["p", "to playlist"],
             ["tab", kind === "song" ? "albums" : "songs"],
             ["/", "search"],
             ...(jobs.length ? ([["c", "clear done"]] as [string, string][]) : []),
@@ -432,6 +441,25 @@ function App() {
         </box>
       )}
 
+      {picking && (
+        <PlaylistPicker
+          label={picking.title}
+          playlists={(() => {
+            const all = listPlaylists()
+            return lastPlaylist && all.includes(lastPlaylist) ? [lastPlaylist, ...all.filter((p) => p !== lastPlaylist)] : all
+          })()}
+          width={width}
+          height={height}
+          onCancel={() => setPicking(null)}
+          onPick={(playlist) => {
+            setPicking(null)
+            setLastPlaylist(playlist)
+            mkdirSync(join(OUT_DIR, playlist), { recursive: true }) // so it's listed right away
+            downloadItem(picking, playlist)
+          }}
+        />
+      )}
+
       {/* Footer: notice or key hints */}
       <box height={1} paddingLeft={1}>
         {notice ? (
@@ -451,8 +479,13 @@ function App() {
   )
 }
 
-if (process.argv[2] === "opus") {
-  await import("./opus")
+const cmd = process.argv[2]
+if (cmd === "opus") {
+  const { buildOpus } = await import("./opus")
+  process.exit((await buildOpus(process.argv[3] ?? OPUS_DIR)) ? 1 : 0)
+} else if (cmd === "sync") {
+  const { sync } = await import("./sync")
+  process.exit(await sync())
 } else {
   const renderer = await createCliRenderer({ exitOnCtrlC: false })
   createRoot(renderer).render(<App />)

@@ -5,7 +5,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "start": "bun src/main.tsx",
-    "opus": "bun src/main.tsx opus"
+    "opus": "bun src/main.tsx opus",
+    "sync": "bun src/main.tsx sync"
   },
   "devDependencies": {
     "@types/bun": "latest",
