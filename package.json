@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "start": "bun src/main.tsx"
+    "start": "bun src/main.tsx",
+    "opus": "bun src/main.tsx opus"
   },
   "devDependencies": {
     "@types/bun": "latest",

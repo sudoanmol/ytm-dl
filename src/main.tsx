@@ -2,7 +2,7 @@
 import { createCliRenderer, type KeyEvent } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useEffect, useRef, useState } from "react"
-import { albumArgs, busy, killAll, OUT_DIR, runYtDlp, songArgs } from "./download"
+import { albumRef, busy, DEFAULT_TARGET, download as runDownload, killAll, OUT_DIR, record, type Entry } from "./download"
 import { getAlbum, search, type Album, type AlbumDetail, type Item, type Kind, type Song } from "./ytm"
 
 const C = {
@@ -128,7 +128,7 @@ function App() {
 
   const patch = (key: string, p: Partial<Job>) => setJobs((js) => js.map((j) => (j.key === key ? { ...j, ...p } : j)))
 
-  async function download(job: Omit<Job, "status" | "pct" | "step">, args: () => Promise<string[]>) {
+  async function download(job: Omit<Job, "status" | "pct" | "step">, entry: () => Promise<Entry>) {
     const existing = jobs.find((j) => j.key === job.key)
     if (existing && existing.status !== "failed") {
       setNotice(existing.status === "done" ? `Already downloaded: ${job.label}` : `Already queued: ${job.label}`)
@@ -136,8 +136,10 @@ function App() {
     }
     setJobs((js) => [{ ...job, status: "queued", pct: 0, step: "" }, ...js.filter((j) => j.key !== job.key)])
     try {
-      const err = await runYtDlp(
-        await args(),
+      const e = await entry()
+      const err = await runDownload(
+        e,
+        DEFAULT_TARGET,
         () => patch(job.key, { status: "running" }),
         (line) => {
           const m = line.match(/^(\S+)\/(\S+)\s+([\d.]+)%/)
@@ -147,6 +149,7 @@ function App() {
           patch(job.key, { pct: ((i - 1 + Number(m[3]) / 100) / n) * 100, step: n > 1 ? `${i}/${n}` : "" })
         },
       )
+      if (!err) await record(e)
       patch(job.key, err ? { status: "failed", error: err } : { status: "done", pct: 100 })
     } catch (e) {
       patch(job.key, { status: "failed", error: String((e as Error).message ?? e) })
@@ -156,12 +159,12 @@ function App() {
   const downloadSong = (s: Song) => {
     const track = album?.tracks.find((t) => t.id === s.id)
     download({ key: `song:${s.id}`, label: s.title, sub: track ? `${s.artist} · ${s.album}` : s.artist }, async () =>
-      album && track ? albumArgs(album, track.index) : songArgs(s),
+      album && track ? { type: "album", album: albumRef(album), track: track.index } : { type: "song", song: s },
     )
   }
   const downloadAlbum = (a: Album) =>
     download({ key: `album:${a.id}`, label: a.title, sub: `${a.artist} · album` }, async () =>
-      albumArgs(album?.id === a.id ? album : await getAlbum(a)),
+      ({ type: "album", album: albumRef(album?.id === a.id ? album : await getAlbum(a)) }),
     )
 
   function quit() {
@@ -448,5 +451,9 @@ function App() {
   )
 }
 
-const renderer = await createCliRenderer({ exitOnCtrlC: false })
-createRoot(renderer).render(<App />)
+if (process.argv[2] === "opus") {
+  await import("./opus")
+} else {
+  const renderer = await createCliRenderer({ exitOnCtrlC: false })
+  createRoot(renderer).render(<App />)
+}
