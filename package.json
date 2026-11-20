@@ -1,0 +1,23 @@
+{
+  "name": "ytm-dl",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "start": "bun src/main.tsx"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.8.4",
+    "@opentui/react": "^0.8.4",
+    "react": "^19.3.1",
+    "youtubei.js": "^18.3.0"
+  },
+  "bin": {
+    "ytm-dl": "src/main.tsx"
+  }
+}
